@@ -1,0 +1,72 @@
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float4 redact_rects[64];
+uniform int redact_rect_count;
+uniform float blur_strength;
+uniform bool debug_overlay;
+
+sampler_state textureSampler {
+	Filter    = Linear;
+	AddressU  = Clamp;
+	AddressV  = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv = v_in.uv;
+	return vert_out;
+}
+
+bool in_rect(float2 uv, float4 rect)
+{
+	return uv.x >= rect.x && uv.x <= rect.z && uv.y >= rect.y && uv.y <= rect.w;
+}
+
+float4 PSRedact(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float4 color = image.Sample(textureSampler, uv);
+
+	for (int i = 0; i < redact_rect_count; i++) {
+		float4 rect = redact_rects[i];
+		if (in_rect(uv, rect)) {
+			float2 pixel = float2(blur_strength / 1920.0, blur_strength / 1080.0);
+			float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+			sum += image.Sample(textureSampler, uv + pixel * float2(-2.0, -2.0));
+			sum += image.Sample(textureSampler, uv + pixel * float2( 0.0, -2.0));
+			sum += image.Sample(textureSampler, uv + pixel * float2( 2.0, -2.0));
+			sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  0.0));
+			sum += image.Sample(textureSampler, uv);
+			sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  0.0));
+			sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  2.0));
+			sum += image.Sample(textureSampler, uv + pixel * float2( 0.0,  2.0));
+			sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  2.0));
+			color = sum / 9.0;
+
+			if (debug_overlay) {
+				bool edge = uv.x - rect.x < 0.002 || rect.z - uv.x < 0.002 || uv.y - rect.y < 0.002 || rect.w - uv.y < 0.002;
+				if (edge) {
+					color = float4(1.0, 0.15, 0.05, 1.0);
+				}
+			}
+		}
+	}
+
+	return color;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRedact(v_in);
+	}
+}

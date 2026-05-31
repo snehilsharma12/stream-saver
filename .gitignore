@@ -1,0 +1,16 @@
+build/
+package/
+dist/
+*.user
+*.suo
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.pyc
+__pycache__/
+.pytest_cache/
+.deps/
+build_x64/
+build_x86_64/

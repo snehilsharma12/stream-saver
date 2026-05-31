@@ -1,0 +1,6 @@
+# Latest stable Paddle stack verified on PyPI.
+# PaddlePaddle 3.3.1 publishes wheels for CPython 3.9-3.13, not 3.14.
+paddleocr==3.6.0
+paddlepaddle==3.3.1
+Pillow>=10.0.0
+numpy>=1.24.0
