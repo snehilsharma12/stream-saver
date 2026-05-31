@@ -17,6 +17,7 @@ target_sources(
   PRIVATE
     src/plugin.cpp
     src/stream_saver_filter.cpp
+    src/image_encoder.cpp
     src/ocr_client.cpp
     src/worker_process.cpp
     src/matcher.cpp
@@ -26,7 +27,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE src)
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
 
 find_package(libobs REQUIRED)
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
+find_package(obs-frontend-api REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs OBS::obs-frontend-api)
 
 if(WIN32)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

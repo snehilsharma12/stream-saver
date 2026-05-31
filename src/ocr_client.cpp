@@ -1,9 +1,11 @@
 #include "ocr_client.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <regex>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -113,6 +115,21 @@ bool send_all(socket_handle socket, const std::string &message)
 	return true;
 }
 
+void set_socket_timeouts(socket_handle socket, int milliseconds)
+{
+#ifdef _WIN32
+	DWORD timeout = static_cast<DWORD>(milliseconds);
+	setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&timeout), sizeof(timeout));
+	setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout), sizeof(timeout));
+#else
+	timeval timeout = {};
+	timeout.tv_sec = milliseconds / 1000;
+	timeout.tv_usec = (milliseconds % 1000) * 1000;
+	setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+	setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
 } // namespace
 
 OcrClient::OcrClient()
@@ -186,16 +203,21 @@ OcrResult OcrClient::send_request(const OcrFrame &frame)
 	}
 
 	socket_handle socket = invalid_socket_handle;
-	for (addrinfo *address = addresses; address != nullptr; address = address->ai_next) {
-		socket = ::socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+	for (int attempt = 0; attempt < 10 && socket == invalid_socket_handle; ++attempt) {
+		for (addrinfo *address = addresses; address != nullptr; address = address->ai_next) {
+			socket = ::socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+			if (socket == invalid_socket_handle)
+				continue;
+
+			if (connect(socket, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0)
+				break;
+
+			close_socket(socket);
+			socket = invalid_socket_handle;
+		}
+
 		if (socket == invalid_socket_handle)
-			continue;
-
-		if (connect(socket, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0)
-			break;
-
-		close_socket(socket);
-		socket = invalid_socket_handle;
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 	freeaddrinfo(addresses);
@@ -204,6 +226,8 @@ OcrResult OcrClient::send_request(const OcrFrame &frame)
 		result.error = "failed to connect to OCR worker";
 		return result;
 	}
+
+	set_socket_timeouts(socket, 5000);
 
 	std::ostringstream request;
 	request << "{\"type\":\"ocr\",\"frame_id\":" << frame.frame_id << ",\"width\":"

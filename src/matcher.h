@@ -35,6 +35,7 @@ std::vector<std::string> parse_phrase_list(const std::string &phrases);
 class PhraseMatcher {
 public:
 	void set_phrases(const std::string &phrases);
+	bool has_phrases() const;
 	std::vector<RedactionRegion> match(const std::vector<OcrDetection> &detections,
 					    float confidence_threshold, int padding_px,
 					    int frame_width, int frame_height) const;

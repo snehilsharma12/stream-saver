@@ -26,6 +26,9 @@ Release packaging should convert `stream_saver_ocr.py` into:
 
 PyInstaller example:
 
-```bash
-pyinstaller --onefile --name stream-saver-ocr stream_saver_ocr.py
+```powershell
+python -m pip install -r worker\requirements-build.txt
+.\scripts\package-worker.ps1
 ```
+
+On Windows this creates `worker\stream-saver-ocr.exe`, which the OBS plugin prefers over the Python script.

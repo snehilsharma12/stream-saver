@@ -67,6 +67,11 @@ void PhraseMatcher::set_phrases(const std::string &phrases)
 	phrases_ = parse_phrase_list(phrases);
 }
 
+bool PhraseMatcher::has_phrases() const
+{
+	return !phrases_.empty();
+}
+
 std::vector<RedactionRegion> PhraseMatcher::match(const std::vector<OcrDetection> &detections,
 						   float confidence_threshold,
 						   int padding_px, int frame_width,

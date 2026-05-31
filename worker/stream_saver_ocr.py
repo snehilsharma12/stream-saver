@@ -31,6 +31,7 @@ class OcrEngine:
         # Windows CPU/runtime combinations it fails during OCR inference, so
         # keep the worker on the more conservative Paddle CPU backend.
         os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "False")
+        self._patch_paddlex_frozen_extra_check()
 
         try:
             from paddleocr import PaddleOCR
@@ -45,6 +46,66 @@ class OcrEngine:
             lang=lang,
             enable_mkldnn=False,
         )
+
+    @staticmethod
+    def _patch_paddlex_frozen_extra_check() -> None:
+        if not getattr(sys, "frozen", False):
+            return
+
+        try:
+            from paddlex.utils import deps as paddlex_deps
+        except Exception:
+            return
+
+        original_is_dep_available = paddlex_deps.is_dep_available
+        original_is_extra_available = paddlex_deps.is_extra_available
+
+        def is_dep_available(dep: str, /, check_version: bool = False) -> bool:
+            if check_version:
+                return original_is_dep_available(dep, check_version=True)
+
+            frozen_dep_modules = {
+                "opencv-contrib-python": "cv2",
+                "opencv-python": "cv2",
+                "pypdfium2": "pypdfium2",
+                "pyclipper": "pyclipper",
+                "python-bidi": "bidi",
+                "imagesize": "imagesize",
+                "shapely": "shapely",
+            }
+            module = frozen_dep_modules.get(dep)
+            if module:
+                try:
+                    __import__(module)
+                    return True
+                except Exception:
+                    return False
+
+            return original_is_dep_available(dep)
+
+        def is_extra_available(extra: str) -> bool:
+            if extra in {"ocr", "ocr-core"}:
+                required_modules = ("cv2", "imagesize", "pyclipper", "pypdfium2", "bidi", "shapely")
+                try:
+                    return all(__import__(module) for module in required_modules)
+                except Exception:
+                    return False
+            return original_is_extra_available(extra)
+
+        paddlex_deps.is_dep_available = is_dep_available
+        paddlex_deps.is_extra_available = is_extra_available
+
+        try:
+            import cv2
+            import pypdfium2
+        except Exception:
+            return
+
+        for module in list(sys.modules.values()):
+            module_name = getattr(module, "__name__", "")
+            if module_name.startswith("paddlex."):
+                module.__dict__.setdefault("cv2", cv2)
+                module.__dict__.setdefault("pypdfium2", pypdfium2)
 
     def recognize_png_base64(self, image_b64: str) -> list[Detection]:
         if not image_b64:

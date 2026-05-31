@@ -24,7 +24,14 @@ WorkerProcess::~WorkerProcess()
 bool WorkerProcess::running() const
 {
 #ifdef _WIN32
-	return process_.hProcess != nullptr;
+	if (!process_.hProcess)
+		return false;
+
+	DWORD exit_code = 0;
+	if (!GetExitCodeProcess(process_.hProcess, &exit_code))
+		return false;
+
+	return exit_code == STILL_ACTIVE;
 #else
 	return pid_ > 0;
 #endif
@@ -37,6 +44,14 @@ bool WorkerProcess::start(const std::string &path, int port)
 
 	if (running())
 		return true;
+
+#ifdef _WIN32
+	if (process_.hProcess) {
+		CloseHandle(process_.hThread);
+		CloseHandle(process_.hProcess);
+		process_ = {};
+	}
+#endif
 
 	const std::string port_arg = std::to_string(port);
 
@@ -58,6 +73,7 @@ bool WorkerProcess::start(const std::string &path, int port)
 		return false;
 	}
 
+	blog(LOG_INFO, "[stream-saver] started OCR worker: %s", path.c_str());
 	return true;
 #else
 	pid_ = fork();
@@ -72,6 +88,7 @@ bool WorkerProcess::start(const std::string &path, int port)
 		return false;
 	}
 
+	blog(LOG_INFO, "[stream-saver] started OCR worker: %s", path.c_str());
 	return true;
 #endif
 }
