@@ -6,15 +6,15 @@ Use this skill when working on the Stream Saver OBS OCR redaction plugin in this
 
 1. Read `AGENT.md` first. It contains the current project handoff, build commands, debugging commands, and known issues.
 2. Check `git status --short` before editing. The worktree may already contain user/session changes; do not revert unrelated edits.
-3. For OCR/redaction bugs, inspect logs before changing code:
+3. For detector/redaction bugs, inspect logs before changing code:
    - OBS logs in `%APPDATA%\obs-studio\logs`
    - Worker log in `C:\ProgramData\obs-studio\plugins\stream-saver\data\worker\stream-saver-worker.log`
    - Debug images in the same worker directory
 4. Categorize the failure:
    - no submit
-   - slow/no OCR response
-   - OCR missed text
-   - matcher produced wrong regions
+   - slow/no detector response
+   - detector missed text
+   - coordinate mapping produced wrong regions
    - shader rendered weak/wrong redaction
 5. Keep fixes scoped to the relevant layer.
 
@@ -42,9 +42,8 @@ python -m unittest tests.python.test_worker_protocol
 ## Key Files
 
 - `src/stream_saver_filter.cpp`: lifecycle, warmup, frame capture, OCR submission, effect parameters
-- `src/matcher.cpp`: text normalization and region matching
+- `src/matcher.cpp`: legacy phrase normalization/matching; YOLO mode redacts detector boxes directly
 - `src/ocr_client.cpp`: TCP protocol client
-- `worker/stream_saver_ocr.py`: PaddleOCR worker
+- `worker/stream_saver_ocr.py`: YOLO text detector worker
 - `data/effects/redact_blur.effect`: redaction shader
 - `docs/protocol.md`: JSON protocol
-

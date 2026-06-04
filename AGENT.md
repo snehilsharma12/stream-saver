@@ -40,9 +40,9 @@ Recent work focused on live OBS testing:
   - `stream-saver-last-frame.png`: OCR input frame.
   - `stream-saver-last-source-frame.png`: full source frame, when debug overlay is enabled and a downscaled OCR input is used.
 
-As of the latest session, startup is much better, but small text is not consistently detected/redacted. The latest user screenshot showed larger regions redacted but small visible words like `Garden`, `Steam`, and `123 Dump Drive` remaining unredacted. The likely next work is tuning OCR capture size, detection thresholds, and/or adding targeted crops around likely text instead of only one scaled full-frame OCR pass.
+As of June 4, 2026, the YOLO text-detection path is working in OBS testing. Startup/warmup behavior is good, stale first-recording results have been addressed, and small text that previously slipped through is now detected/redacted with the current detector setup.
 
-Also watch for large empty redactions. This came from line-combining in `src/matcher.cpp` sweeping across too many OCR boxes before finding a multi-word phrase. The matcher now limits combination by word count and gap, but keep testing with OBS recursion and small text.
+There is no currently active blocker called out by the user. If text is missed again, treat it as detector/capture/model tuning first, not phrase matching: YOLO mode redacts all detected text and does not depend on the old OCR phrase matcher.
 
 ## Build
 
@@ -114,14 +114,14 @@ C:\ProgramData\obs-studio\plugins\stream-saver\data\worker\stream-saver-last-sou
 Read logs by failure class:
 
 - No redaction and no `OCR frame ... submitted`: submit gating/lifecycle problem.
-- `submitted` but no response until much later: OCR too slow or worker busy.
+- `submitted` but no response until much later: detector too slow or worker busy.
 - Worker `detector response ... detections=0` lacks the target: model/capture quality problem.
 - Worker detects target but plugin regions are wrong: coordinate normalization problem.
 - Regions are correct but visual is readable: shader/effect problem.
 
-## OCR Protocol
+## Worker Protocol
 
-The worker accepts newline-delimited JSON over TCP:
+The protocol still uses the legacy request type `"ocr"` even though the worker now performs YOLO text detection. The worker accepts newline-delimited JSON over TCP:
 
 ```json
 {
@@ -138,7 +138,7 @@ The worker accepts newline-delimited JSON over TCP:
 }
 ```
 
-`width`/`height` are OCR-frame coordinates. Returned boxes are in OCR-frame coordinates. `source_image` is optional and only for debug dumps.
+`width`/`height` are detector-frame coordinates. Returned boxes are in detector-frame coordinates. `source_image` is optional and only for debug dumps.
 
 Warmup requests use `warmup: true` and a synthetic image. They should not write debug frame dumps or consume real source pixels.
 
@@ -170,7 +170,7 @@ Generated debug outputs must not be committed or packaged:
 
 ## Current Suggested Next Steps
 
-For the small-text issue:
+If detection quality regresses:
 
 1. Inspect the latest worker `detector response ... detections=` line and saved frame dump.
 2. If small text is absent, verify the YOLO model is trained for text detection and raise YOLO image size.
