@@ -22,10 +22,18 @@ Response:
   "frame_id": 42,
   "width": 1280,
   "height": 720,
+  "source_width": 1920,
+  "source_height": 1080,
   "format": "png-base64",
-  "image": "..."
+  "image": "...",
+  "source_image": "..."
 }
 ```
+
+`width` and `height` describe the PNG sent to OCR. `source_width` and
+`source_height` describe the original OBS source frame. `source_image` is
+optional and is used only for full-frame debug dumps when the OCR image was
+downscaled.
 
 Response:
 
@@ -43,7 +51,7 @@ Response:
 }
 ```
 
-`box` is an eight-number quadrilateral in source image coordinates.
+`box` is an eight-number quadrilateral in OCR image coordinates.
 
 ## Error
 

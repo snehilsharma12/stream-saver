@@ -69,6 +69,24 @@ void test_clamping()
 	expect(regions[0].bottom == 1.0f, "clamps bottom");
 }
 
+void test_split_phrase_line_match()
+{
+	PhraseMatcher matcher;
+	matcher.set_phrases("123 Dump Drive\nSteam");
+
+	std::vector<OcrDetection> detections = {
+		{"123", 0.95f, {300, 100, 340, 125}},
+		{"Dump", 0.95f, {350, 101, 420, 126}},
+		{"Drive", 0.95f, {430, 100, 500, 125}},
+		{"Steamed", 0.99f, {20, 200, 90, 225}},
+	};
+
+	const auto regions = matcher.match(detections, 0.75f, 5, 600, 300);
+	expect(regions.size() == 1, "matches split multi-word phrase without substring false positive");
+	expect(regions[0].left < 0.51f && regions[0].right > 0.83f,
+	       "split phrase region covers combined words");
+}
+
 } // namespace
 
 int main()
@@ -77,6 +95,7 @@ int main()
 	test_parse_phrase_list();
 	test_match();
 	test_clamping();
+	test_split_phrase_line_match();
 	std::cout << "matcher tests passed\n";
 	return 0;
 }

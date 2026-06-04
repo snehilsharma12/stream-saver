@@ -43,6 +43,8 @@ install(
   USE_SOURCE_PERMISSIONS
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE
+  PATTERN "stream-saver-last-*.png" EXCLUDE
+  PATTERN "stream-saver-worker.log" EXCLUDE
 )
 
 if(STREAM_SAVER_BUILD_TESTS)

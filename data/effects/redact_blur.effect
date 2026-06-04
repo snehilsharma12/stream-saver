@@ -3,6 +3,21 @@ uniform texture2d image;
 
 uniform float redact_rect_count;
 uniform float4 redact_rect0;
+uniform float4 redact_rect1;
+uniform float4 redact_rect2;
+uniform float4 redact_rect3;
+uniform float4 redact_rect4;
+uniform float4 redact_rect5;
+uniform float4 redact_rect6;
+uniform float4 redact_rect7;
+uniform float4 redact_rect8;
+uniform float4 redact_rect9;
+uniform float4 redact_rect10;
+uniform float4 redact_rect11;
+uniform float4 redact_rect12;
+uniform float4 redact_rect13;
+uniform float4 redact_rect14;
+uniform float4 redact_rect15;
 uniform float blur_strength;
 uniform float debug_overlay;
 
@@ -25,26 +40,44 @@ VertData VSDefault(VertData v_in)
 	return vert_out;
 }
 
-float4 PSRedact(VertData v_in) : TARGET
+float4 redact_one(float2 uv, float4 rect, float4 color)
 {
-	float2 uv = v_in.uv;
-	float4 color = image.Sample(textureSampler, uv);
-	float4 rect = redact_rect0;
-
-	if (redact_rect_count > 0.5 &&
-	    uv.x >= rect.x && uv.x <= rect.z &&
+	if (uv.x >= rect.x && uv.x <= rect.z &&
 	    uv.y >= rect.y && uv.y <= rect.w) {
 		float2 pixel = float2(blur_strength / 1920.0, blur_strength / 1080.0);
-		float4 sum = image.Sample(textureSampler, uv + pixel * float2(-2.0, -2.0));
-		sum += image.Sample(textureSampler, uv + pixel * float2( 0.0, -2.0));
-		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0, -2.0));
-		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  0.0));
-		sum += image.Sample(textureSampler, uv);
-		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  0.0));
-		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  2.0));
-		sum += image.Sample(textureSampler, uv + pixel * float2( 0.0,  2.0));
-		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  2.0));
-		color = sum / 9.0;
+		float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+
+		sum += image.Sample(textureSampler, uv + pixel * float2(-4.0, -4.0)) * 1.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0, -4.0)) * 4.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 0.0, -4.0)) * 6.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0, -4.0)) * 4.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 4.0, -4.0)) * 1.0;
+
+		sum += image.Sample(textureSampler, uv + pixel * float2(-4.0, -2.0)) * 4.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0, -2.0)) * 16.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 0.0, -2.0)) * 24.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0, -2.0)) * 16.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 4.0, -2.0)) * 4.0;
+
+		sum += image.Sample(textureSampler, uv + pixel * float2(-4.0,  0.0)) * 6.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  0.0)) * 24.0;
+		sum += image.Sample(textureSampler, uv) * 36.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  0.0)) * 24.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 4.0,  0.0)) * 6.0;
+
+		sum += image.Sample(textureSampler, uv + pixel * float2(-4.0,  2.0)) * 4.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  2.0)) * 16.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 0.0,  2.0)) * 24.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  2.0)) * 16.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 4.0,  2.0)) * 4.0;
+
+		sum += image.Sample(textureSampler, uv + pixel * float2(-4.0,  4.0)) * 1.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2(-2.0,  4.0)) * 4.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 0.0,  4.0)) * 6.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 2.0,  4.0)) * 4.0;
+		sum += image.Sample(textureSampler, uv + pixel * float2( 4.0,  4.0)) * 1.0;
+
+		color = float4(0.015, 0.015, 0.015, 1.0);
 
 		if (debug_overlay > 0.5 &&
 		    (uv.x - rect.x < 0.002 || rect.z - uv.x < 0.002 ||
@@ -52,6 +85,31 @@ float4 PSRedact(VertData v_in) : TARGET
 			color = float4(1.0, 0.15, 0.05, 1.0);
 		}
 	}
+
+	return color;
+}
+
+float4 PSRedact(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float4 color = image.Sample(textureSampler, uv);
+
+	if (redact_rect_count > 0.5) color = redact_one(uv, redact_rect0, color);
+	if (redact_rect_count > 1.5) color = redact_one(uv, redact_rect1, color);
+	if (redact_rect_count > 2.5) color = redact_one(uv, redact_rect2, color);
+	if (redact_rect_count > 3.5) color = redact_one(uv, redact_rect3, color);
+	if (redact_rect_count > 4.5) color = redact_one(uv, redact_rect4, color);
+	if (redact_rect_count > 5.5) color = redact_one(uv, redact_rect5, color);
+	if (redact_rect_count > 6.5) color = redact_one(uv, redact_rect6, color);
+	if (redact_rect_count > 7.5) color = redact_one(uv, redact_rect7, color);
+	if (redact_rect_count > 8.5) color = redact_one(uv, redact_rect8, color);
+	if (redact_rect_count > 9.5) color = redact_one(uv, redact_rect9, color);
+	if (redact_rect_count > 10.5) color = redact_one(uv, redact_rect10, color);
+	if (redact_rect_count > 11.5) color = redact_one(uv, redact_rect11, color);
+	if (redact_rect_count > 12.5) color = redact_one(uv, redact_rect12, color);
+	if (redact_rect_count > 13.5) color = redact_one(uv, redact_rect13, color);
+	if (redact_rect_count > 14.5) color = redact_one(uv, redact_rect14, color);
+	if (redact_rect_count > 15.5) color = redact_one(uv, redact_rect15, color);
 
 	return color;
 }

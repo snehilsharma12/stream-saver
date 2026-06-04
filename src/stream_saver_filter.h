@@ -44,6 +44,9 @@ struct StreamSaverFilter {
 
 	std::atomic_uint64_t frame_index{0};
 	std::atomic_uint64_t next_ocr_frame{0};
+	std::atomic_bool warmup_submitted{false};
+	std::atomic_bool output_was_active{false};
+	std::atomic_uint64_t output_generation{0};
 	std::mutex regions_mutex;
 	std::vector<RedactionRegion> regions;
 };

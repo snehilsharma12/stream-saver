@@ -14,7 +14,9 @@ import json
 import os
 import socketserver
 import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -26,7 +28,7 @@ class Detection:
 
 
 class OcrEngine:
-    def __init__(self, lang: str = "en", use_textline_orientation: bool = True) -> None:
+    def __init__(self, lang: str = "en", use_textline_orientation: bool = False) -> None:
         # PaddleOCR 3.x enables MKL-DNN/oneDNN by default on CPU. On some
         # Windows CPU/runtime combinations it fails during OCR inference, so
         # keep the worker on the more conservative Paddle CPU backend.
@@ -42,8 +44,11 @@ class OcrEngine:
 
         self._use_textline_orientation = use_textline_orientation
         self._engine = PaddleOCR(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
             use_textline_orientation=use_textline_orientation,
-            lang=lang,
+            text_detection_model_name="PP-OCRv4_mobile_det",
+            text_recognition_model_name="en_PP-OCRv4_mobile_rec" if lang == "en" else None,
             enable_mkldnn=False,
         )
 
@@ -117,13 +122,23 @@ class OcrEngine:
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError("Pillow and numpy are required by the OCR worker") from exc
 
+        decode_started = time.monotonic()
         raw = base64.b64decode(image_b64)
         image = Image.open(io.BytesIO(raw)).convert("RGB")
         array = np.asarray(image)
+        decode_ms = int((time.monotonic() - decode_started) * 1000)
 
+        predict_started = time.monotonic()
         result = self._engine.predict(
             array,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
             use_textline_orientation=self._use_textline_orientation,
+        )
+        predict_ms = int((time.monotonic() - predict_started) * 1000)
+        print(
+            f"ocr engine timing decode_ms={decode_ms} predict_ms={predict_ms} image={image.width}x{image.height}",
+            flush=True,
         )
         return self._parse_result(result)
 
@@ -213,7 +228,34 @@ class StreamSaverHandler(socketserver.StreamRequestHandler):
 
         frame_id = int(request.get("frame_id", 0))
         image = str(request.get("image", ""))
+        warmup = bool(request.get("warmup", False))
+        started = time.monotonic()
+        worker_dir = Path(__file__).resolve().parent
+        dump_path = worker_dir / "stream-saver-last-frame.png"
+        source_dump_path = worker_dir / "stream-saver-last-source-frame.png"
+        source_image = str(request.get("source_image") or image)
+        if not warmup:
+            try:
+                dump_path.write_bytes(base64.b64decode(image))
+            except Exception as exc:
+                print(f"failed to write OCR frame dump: {exc}", flush=True)
+            try:
+                source_dump_path.write_bytes(base64.b64decode(source_image))
+            except Exception as exc:
+                print(f"failed to write source frame dump: {exc}", flush=True)
+        print(
+            f"ocr request frame={frame_id} width={request.get('width')} height={request.get('height')} "
+            f"source_width={request.get('source_width')} source_height={request.get('source_height')} "
+            f"warmup={warmup} image_base64_bytes={len(image)} source_image_base64_bytes={len(source_image)}",
+            flush=True,
+        )
         detections = self.engine.recognize_png_base64(image)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        preview = " | ".join(detection.text for detection in detections)
+        print(
+            f"ocr response frame={frame_id} detections={len(detections)} elapsed_ms={elapsed_ms} texts={preview}",
+            flush=True,
+        )
 
         return {
             "type": "ocr_result",
@@ -238,7 +280,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=48741)
     parser.add_argument("--lang", default="en")
-    parser.add_argument("--no-textline-orientation", action="store_true")
+    parser.add_argument(
+        "--textline-orientation",
+        dest="use_textline_orientation",
+        action="store_true",
+        help="Enable textline orientation classification.",
+    )
+    parser.add_argument(
+        "--no-textline-orientation",
+        dest="use_textline_orientation",
+        action="store_false",
+    )
+    parser.set_defaults(use_textline_orientation=False)
     return parser.parse_args(argv)
 
 
@@ -247,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
 
     StreamSaverHandler.engine = OcrEngine(
         lang=args.lang,
-        use_textline_orientation=not args.no_textline_orientation,
+        use_textline_orientation=args.use_textline_orientation,
     )
     with ThreadingServer((args.host, args.port), StreamSaverHandler) as server:
         print(f"stream-saver OCR worker listening on {args.host}:{args.port}", flush=True)

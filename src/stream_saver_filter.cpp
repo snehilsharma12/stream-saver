@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <memory>
 #include <utility>
+#include <vector>
 
 using namespace stream_saver;
 
@@ -25,8 +26,13 @@ constexpr const char *SETTING_OCR_MAX_WIDTH = "ocr_max_width";
 constexpr const char *SETTING_DEBUG_OVERLAY = "debug_overlay";
 constexpr const char *SETTING_WORKER_PATH = "worker_path";
 constexpr const char *SETTING_WORKER_PORT = "worker_port";
-constexpr uint64_t OCR_STARTUP_COOLDOWN_FRAMES = 300;
-constexpr uint64_t OCR_ERROR_COOLDOWN_FRAMES = 900;
+constexpr uint32_t OCR_EFFECTIVE_MAX_WIDTH = 960;
+constexpr uint64_t OCR_STARTUP_COOLDOWN_FRAMES = 60;
+constexpr uint64_t OCR_CONNECT_COOLDOWN_FRAMES = 60;
+constexpr uint64_t OCR_ERROR_COOLDOWN_FRAMES = 300;
+constexpr uint32_t OCR_WARMUP_WIDTH = 320;
+constexpr uint32_t OCR_WARMUP_HEIGHT = 96;
+constexpr float MIN_EFFECTIVE_BLUR_STRENGTH = 24.0f;
 
 const char *filter_name(void *)
 {
@@ -38,9 +44,9 @@ void set_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, SETTING_OCR_MODE, static_cast<long long>(OcrMode::Interval));
 	obs_data_set_default_int(settings, SETTING_FRAME_INTERVAL, 60);
 	obs_data_set_default_double(settings, SETTING_CONFIDENCE, 0.75);
-	obs_data_set_default_double(settings, SETTING_BLUR_STRENGTH, 8.0);
+	obs_data_set_default_double(settings, SETTING_BLUR_STRENGTH, MIN_EFFECTIVE_BLUR_STRENGTH);
 	obs_data_set_default_int(settings, SETTING_BOX_PADDING, 8);
-	obs_data_set_default_int(settings, SETTING_OCR_MAX_WIDTH, 960);
+	obs_data_set_default_int(settings, SETTING_OCR_MAX_WIDTH, OCR_EFFECTIVE_MAX_WIDTH);
 	obs_data_set_default_bool(settings, SETTING_DEBUG_OVERLAY, false);
 	obs_data_set_default_int(settings, SETTING_WORKER_PORT, 48741);
 }
@@ -70,7 +76,8 @@ obs_properties_t *get_properties(void *)
 	obs_properties_add_int_slider(props, SETTING_BOX_PADDING,
 				      obs_module_text("StreamSaver.BoxPadding"), 0, 80, 1);
 	obs_properties_add_int_slider(props, SETTING_OCR_MAX_WIDTH,
-				      obs_module_text("StreamSaver.OcrMaxWidth"), 320, 1920, 16);
+				      obs_module_text("StreamSaver.OcrMaxWidth"), 320,
+				      static_cast<int>(OCR_EFFECTIVE_MAX_WIDTH), 16);
 	obs_properties_add_bool(props, SETTING_DEBUG_OVERLAY,
 				obs_module_text("StreamSaver.DebugOverlay"));
 	obs_properties_add_path(props, SETTING_WORKER_PATH,
@@ -95,17 +102,12 @@ void update_settings(StreamSaverFilter *filter, obs_data_t *settings)
 	filter->confidence_threshold = static_cast<float>(obs_data_get_double(settings, SETTING_CONFIDENCE));
 	filter->blur_strength = static_cast<float>(obs_data_get_double(settings, SETTING_BLUR_STRENGTH));
 	filter->box_padding = static_cast<int>(obs_data_get_int(settings, SETTING_BOX_PADDING));
-	filter->ocr_max_width = static_cast<uint32_t>(
-		std::min<int64_t>(960, std::max<int64_t>(320, obs_data_get_int(settings, SETTING_OCR_MAX_WIDTH))));
+	filter->ocr_max_width =
+		static_cast<uint32_t>(std::max<int64_t>(320, obs_data_get_int(settings, SETTING_OCR_MAX_WIDTH)));
 	filter->debug_overlay = obs_data_get_bool(settings, SETTING_DEBUG_OVERLAY);
 	filter->worker_path = obs_data_get_string(settings, SETTING_WORKER_PATH);
 	filter->worker_port = static_cast<uint16_t>(obs_data_get_int(settings, SETTING_WORKER_PORT));
 	filter->ocr_client.configure("127.0.0.1", filter->worker_port);
-
-	if (!filter->matcher.has_phrases()) {
-		filter->worker_process.stop();
-		return;
-	}
 }
 
 bool output_active()
@@ -118,9 +120,11 @@ std::string resolve_worker_path(StreamSaverFilter *filter)
 	std::string worker_path = filter->worker_path;
 	if (worker_path.empty()) {
 #ifdef _WIN32
-		char *module_worker_path = obs_module_file("worker/stream-saver-ocr.exe");
+		char *module_worker_path = obs_module_file("worker/python/python.exe");
 		if (!module_worker_path)
 			module_worker_path = obs_module_file("worker/stream_saver_ocr.py");
+		if (!module_worker_path)
+			module_worker_path = obs_module_file("worker/stream-saver-ocr.exe");
 #else
 		char *module_worker_path = obs_module_file("worker/stream-saver-ocr");
 #endif
@@ -133,7 +137,7 @@ std::string resolve_worker_path(StreamSaverFilter *filter)
 	return worker_path;
 }
 
-bool ensure_worker_started(StreamSaverFilter *filter)
+bool ensure_worker_started(StreamSaverFilter *filter, bool apply_startup_cooldown = true)
 {
 	if (filter->worker_process.running())
 		return true;
@@ -143,15 +147,51 @@ bool ensure_worker_started(StreamSaverFilter *filter)
 		return false;
 
 	const bool started = filter->worker_process.start(worker_path, filter->worker_port);
-	if (started)
+	if (started && apply_startup_cooldown)
 		filter->next_ocr_frame.store(filter->frame_index.load() + OCR_STARTUP_COOLDOWN_FRAMES);
 	return started;
 }
 
-void restart_worker_if_needed(StreamSaverFilter *filter)
+void warmup_worker_if_needed(StreamSaverFilter *filter)
 {
-	if (!filter->matcher.has_phrases() || !output_active())
-		filter->worker_process.stop();
+	bool expected = false;
+	if (!filter->warmup_submitted.compare_exchange_strong(expected, true))
+		return;
+
+	if (!ensure_worker_started(filter, false)) {
+		filter->warmup_submitted.store(false);
+		return;
+	}
+
+	std::vector<uint8_t> pixels(static_cast<size_t>(OCR_WARMUP_WIDTH) * OCR_WARMUP_HEIGHT * 4, 255);
+	const std::string png_base64 =
+		rgba_to_png_base64(pixels.data(), OCR_WARMUP_WIDTH, OCR_WARMUP_HEIGHT,
+				   OCR_WARMUP_WIDTH * 4);
+	if (png_base64.empty()) {
+		filter->warmup_submitted.store(false);
+		return;
+	}
+
+	OcrFrame frame;
+	frame.frame_id = 0;
+	frame.width = static_cast<int>(OCR_WARMUP_WIDTH);
+	frame.height = static_cast<int>(OCR_WARMUP_HEIGHT);
+	frame.source_width = frame.width;
+	frame.source_height = frame.height;
+	frame.warmup = true;
+	frame.png_base64 = png_base64;
+
+	if (!filter->ocr_client.submit(frame, [filter](OcrResult result) {
+		    if (!result.error.empty()) {
+			    blog(LOG_INFO, "[stream-saver] OCR warmup error: %s", result.error.c_str());
+			    filter->warmup_submitted.store(false);
+			    return;
+		    }
+		    blog(LOG_INFO, "[stream-saver] OCR warmup complete: %zu detections",
+			 result.detections.size());
+	    })) {
+		filter->warmup_submitted.store(false);
+	}
 }
 
 void *create_filter(obs_data_t *settings, obs_source_t *source)
@@ -181,7 +221,7 @@ void *create_filter(obs_data_t *settings, obs_source_t *source)
 		blog(LOG_WARNING, "[stream-saver] failed to load redact_blur.effect");
 
 	update_settings(filter, settings);
-	restart_worker_if_needed(filter);
+	warmup_worker_if_needed(filter);
 	return filter;
 }
 
@@ -209,7 +249,7 @@ void update_filter(void *data, obs_data_t *settings)
 {
 	auto *filter = static_cast<StreamSaverFilter *>(data);
 	update_settings(filter, settings);
-	restart_worker_if_needed(filter);
+	warmup_worker_if_needed(filter);
 }
 
 bool should_submit_frame(StreamSaverFilter *filter, uint64_t frame_index)
@@ -239,6 +279,11 @@ bool render_capture_texture(StreamSaverFilter *filter, uint32_t width, uint32_t 
 	if (!target || !parent || !filter->capture_texrender)
 		return false;
 
+	const uint32_t source_width = obs_source_get_base_width(target);
+	const uint32_t source_height = obs_source_get_base_height(target);
+	if (source_width == 0 || source_height == 0)
+		return false;
+
 	const uint32_t parent_flags = obs_source_get_output_flags(parent);
 	const bool custom_draw = (parent_flags & OBS_SOURCE_CUSTOM_DRAW) != 0;
 	const bool async = (parent_flags & OBS_SOURCE_ASYNC) != 0;
@@ -246,6 +291,9 @@ bool render_capture_texture(StreamSaverFilter *filter, uint32_t width, uint32_t 
 	if (!gs_texrender_begin(filter->capture_texrender, width, height))
 		return false;
 
+	gs_viewport_push();
+	gs_projection_push();
+	gs_matrix_push();
 	gs_blend_state_push();
 	gs_blend_function_separate(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA, GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
 
@@ -253,6 +301,9 @@ bool render_capture_texture(StreamSaverFilter *filter, uint32_t width, uint32_t 
 	vec4_zero(&clear_color);
 	gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
 	gs_ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height), -100.0f, 100.0f);
+	gs_matrix_identity();
+	gs_matrix_scale3f(static_cast<float>(width) / static_cast<float>(source_width),
+			  static_cast<float>(height) / static_cast<float>(source_height), 1.0f);
 
 	if (target == parent && !custom_draw && !async)
 		obs_source_default_render(target);
@@ -260,6 +311,9 @@ bool render_capture_texture(StreamSaverFilter *filter, uint32_t width, uint32_t 
 		obs_source_video_render(target);
 
 	gs_blend_state_pop();
+	gs_matrix_pop();
+	gs_projection_pop();
+	gs_viewport_pop();
 	gs_texrender_end(filter->capture_texrender);
 	gs_texrender_reset(filter->capture_texrender);
 	return gs_texrender_get_texture(filter->capture_texrender) != nullptr;
@@ -304,7 +358,6 @@ void submit_frame_for_ocr(StreamSaverFilter *filter, uint64_t frame_index)
 		return;
 
 	if (!output_active()) {
-		filter->worker_process.stop();
 		return;
 	}
 
@@ -327,8 +380,9 @@ void submit_frame_for_ocr(StreamSaverFilter *filter, uint64_t frame_index)
 
 	uint32_t ocr_width = width;
 	uint32_t ocr_height = height;
-	if (ocr_width > filter->ocr_max_width) {
-		ocr_width = filter->ocr_max_width;
+	const uint32_t effective_max_width = std::min(filter->ocr_max_width, OCR_EFFECTIVE_MAX_WIDTH);
+	if (ocr_width > effective_max_width) {
+		ocr_width = effective_max_width;
 		ocr_height = std::max<uint32_t>(1, static_cast<uint32_t>(
 						       (static_cast<uint64_t>(height) * ocr_width) / width));
 	}
@@ -346,33 +400,75 @@ void submit_frame_for_ocr(StreamSaverFilter *filter, uint64_t frame_index)
 	frame.frame_id = frame_index;
 	frame.width = static_cast<int>(ocr_width);
 	frame.height = static_cast<int>(ocr_height);
+	frame.source_width = static_cast<int>(width);
+	frame.source_height = static_cast<int>(height);
 	frame.png_base64 = std::move(png_base64);
+	if (filter->debug_overlay && (ocr_width != width || ocr_height != height)) {
+		std::string source_png_base64;
+		if (capture_png_base64(filter, width, height, source_png_base64)) {
+			frame.source_png_base64 = std::move(source_png_base64);
+		} else {
+			blog(LOG_INFO,
+			     "[stream-saver] OCR frame %llu: failed to capture full-size debug frame %ux%u",
+			     static_cast<unsigned long long>(frame_index), width, height);
+		}
+	}
 
-	if (filter->debug_overlay)
-		blog(LOG_INFO, "[stream-saver] OCR frame %llu submitted: %ux%u, %zu base64 bytes",
-		     static_cast<unsigned long long>(frame_index), ocr_width, ocr_height,
-		     frame.png_base64.size());
+	blog(LOG_INFO,
+	     "[stream-saver] OCR frame %llu submitted: source=%ux%u capture=%ux%u, %zu base64 bytes",
+	     static_cast<unsigned long long>(frame_index), width, height, ocr_width, ocr_height,
+	     frame.png_base64.size());
 
-	const bool submitted = filter->ocr_client.submit(frame, [filter, ocr_width, ocr_height](OcrResult result) {
+	const uint64_t generation = filter->output_generation.load();
+	const bool submitted = filter->ocr_client.submit(frame, [filter, ocr_width, ocr_height, generation](OcrResult result) {
 		if (!result.error.empty()) {
 			blog(filter->debug_overlay ? LOG_INFO : LOG_DEBUG,
 			     "[stream-saver] OCR frame %llu error: %s",
 			     static_cast<unsigned long long>(result.frame_id), result.error.c_str());
-			filter->worker_process.stop();
-			filter->next_ocr_frame.store(result.frame_id + OCR_ERROR_COOLDOWN_FRAMES);
+			if (result.error == "failed to connect to OCR worker") {
+				filter->next_ocr_frame.store(result.frame_id + OCR_CONNECT_COOLDOWN_FRAMES);
+			} else {
+				filter->next_ocr_frame.store(result.frame_id + OCR_ERROR_COOLDOWN_FRAMES);
+			}
+			return;
+		}
+
+		if (!output_active() || filter->output_generation.load() != generation) {
+			blog(LOG_INFO,
+			     "[stream-saver] OCR frame %llu ignored: output stopped or changed before result",
+			     static_cast<unsigned long long>(result.frame_id));
 			return;
 		}
 
 		auto regions = filter->matcher.match(result.detections, filter->confidence_threshold,
 						     filter->box_padding, static_cast<int>(ocr_width),
 						     static_cast<int>(ocr_height));
-		if (filter->debug_overlay) {
-			blog(LOG_INFO, "[stream-saver] OCR frame %llu: %zu detections, %zu redaction regions",
-			     static_cast<unsigned long long>(result.frame_id), result.detections.size(),
-			     regions.size());
+		std::string preview;
+		for (size_t i = 0; i < std::min<size_t>(result.detections.size(), 30); ++i) {
+			if (!preview.empty())
+				preview += " | ";
+			char detection_text[256];
+			const auto &detection = result.detections[i];
+			snprintf(detection_text, sizeof(detection_text), "\"%s\" %.2f [%.0f,%.0f,%.0f,%.0f]",
+				 detection.text.c_str(), detection.confidence, detection.box.x1,
+				 detection.box.y1, detection.box.x2, detection.box.y2);
+			preview += detection_text;
 		}
+		std::string region_preview;
+		for (size_t i = 0; i < std::min<size_t>(regions.size(), 16); ++i) {
+			char region_text[128];
+			snprintf(region_text, sizeof(region_text), "%s[%.3f,%.3f,%.3f,%.3f]",
+				 region_preview.empty() ? "" : ", ", regions[i].left, regions[i].top,
+				 regions[i].right, regions[i].bottom);
+			region_preview += region_text;
+		}
+		blog(LOG_INFO,
+		     "[stream-saver] OCR frame %llu: %zu detections, %zu redaction regions, texts: %s, regions: %s",
+		     static_cast<unsigned long long>(result.frame_id), result.detections.size(),
+		     regions.size(), preview.c_str(), region_preview.c_str());
 		std::lock_guard<std::mutex> lock(filter->regions_mutex);
 		filter->regions = std::move(regions);
+
 	});
 
 	if (!submitted && filter->debug_overlay)
@@ -385,7 +481,7 @@ void set_effect_params(StreamSaverFilter *filter)
 	if (!filter->effect)
 		return;
 
-	std::array<vec4, 1> rects = {};
+	std::array<vec4, 16> rects = {};
 	int rect_count = 0;
 	{
 		std::lock_guard<std::mutex> lock(filter->regions_mutex);
@@ -402,11 +498,16 @@ void set_effect_params(StreamSaverFilter *filter)
 		rect_count = 1;
 	}
 
-	gs_effect_set_vec4(gs_effect_get_param_by_name(filter->effect, "redact_rect0"), &rects[0]);
+	for (int i = 0; i < static_cast<int>(rects.size()); ++i) {
+		char param_name[32];
+		snprintf(param_name, sizeof(param_name), "redact_rect%d", i);
+		gs_effect_set_vec4(gs_effect_get_param_by_name(filter->effect, param_name),
+				   &rects[static_cast<size_t>(i)]);
+	}
 	gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "redact_rect_count"),
-			    rect_count > 0 ? 1.0f : 0.0f);
+			    static_cast<float>(rect_count));
 	gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "blur_strength"),
-			    filter->blur_strength);
+			    std::max(filter->blur_strength, MIN_EFFECTIVE_BLUR_STRENGTH));
 	gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "debug_overlay"),
 			    filter->debug_overlay ? 1.0f : 0.0f);
 }
@@ -418,6 +519,30 @@ void video_render(void *data, gs_effect_t *)
 		return;
 
 	const uint64_t frame_index = filter->frame_index.fetch_add(1);
+	const bool active = output_active();
+	const bool was_active = filter->output_was_active.exchange(active);
+	if (active && !was_active) {
+		filter->output_generation.fetch_add(1);
+		filter->next_ocr_frame.store(frame_index);
+		{
+			std::lock_guard<std::mutex> lock(filter->regions_mutex);
+			filter->regions.clear();
+		}
+		blog(LOG_INFO, "[stream-saver] output started: OCR generation %llu",
+		     static_cast<unsigned long long>(filter->output_generation.load()));
+	} else if (!active && was_active) {
+		filter->output_generation.fetch_add(1);
+		{
+			std::lock_guard<std::mutex> lock(filter->regions_mutex);
+			filter->regions.clear();
+		}
+		blog(LOG_INFO, "[stream-saver] output stopped: cleared redaction regions");
+	}
+
+	if (filter->warmup_submitted.load() && !filter->worker_process.running())
+		filter->warmup_submitted.store(false);
+	if (!filter->warmup_submitted.load() && !filter->ocr_client.busy())
+		warmup_worker_if_needed(filter);
 
 	if (!filter->effect) {
 		obs_source_skip_video_filter(filter->source);
@@ -430,11 +555,8 @@ void video_render(void *data, gs_effect_t *)
 	set_effect_params(filter);
 	obs_source_process_filter_end(filter->source, filter->effect, 0, 0);
 
-	if (!output_active()) {
-		if (filter->worker_process.running())
-			filter->worker_process.stop();
+	if (!active)
 		return;
-	}
 
 	if (filter->matcher.has_phrases() && frame_index >= filter->next_ocr_frame.load())
 		ensure_worker_started(filter);

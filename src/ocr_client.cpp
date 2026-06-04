@@ -180,10 +180,11 @@ bool OcrClient::submit(OcrFrame frame, OcrCallback callback)
 void OcrClient::worker_thread(OcrFrame frame, OcrCallback callback)
 {
 	OcrResult result = send_request(frame);
-	busy_.store(false);
 
 	if (callback)
 		callback(std::move(result));
+
+	busy_.store(false);
 }
 
 OcrResult OcrClient::send_request(const OcrFrame &frame)
@@ -227,13 +228,20 @@ OcrResult OcrClient::send_request(const OcrFrame &frame)
 		return result;
 	}
 
-	set_socket_timeouts(socket, 5000);
+	set_socket_timeouts(socket, 60000);
 
 	std::ostringstream request;
 	request << "{\"type\":\"ocr\",\"frame_id\":" << frame.frame_id << ",\"width\":"
 		<< frame.width << ",\"height\":" << frame.height
+		<< ",\"source_width\":" << frame.source_width
+		<< ",\"source_height\":" << frame.source_height
+		<< ",\"warmup\":" << (frame.warmup ? "true" : "false")
 		<< ",\"format\":\"png-base64\",\"image\":\""
-		<< escape_json(frame.png_base64) << "\"}\n";
+		<< escape_json(frame.png_base64) << "\"";
+	if (!frame.source_png_base64.empty()) {
+		request << ",\"source_image\":\"" << escape_json(frame.source_png_base64) << "\"";
+	}
+	request << "}\n";
 
 	if (!send_all(socket, request.str())) {
 		result.error = "failed to send OCR request";

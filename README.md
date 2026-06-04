@@ -43,7 +43,15 @@ python -m pip install -r worker/requirements.txt
 
 Use Python 3.9-3.13 for the worker. The pinned latest Paddle stack uses `paddleocr==3.6.0` and `paddlepaddle==3.3.1`; PaddlePaddle does not currently publish Python 3.14 wheels.
 
-For release packages, build the worker into a standalone executable with PyInstaller or ship a managed Python environment in `data/worker`.
+For release packages, prefer a managed Python environment in `data/worker/python`
+so users do not need global Python or global PaddleOCR:
+
+```powershell
+.\scripts\package-managed-worker.ps1
+```
+
+The PyInstaller executable path remains available as a fallback, but the plugin
+prefers the managed Python runtime first on Windows.
 
 ## Install Into OBS
 
@@ -53,7 +61,8 @@ Windows:
 C:\ProgramData\obs-studio\plugins\stream-saver\bin\64bit\stream-saver.dll
 C:\ProgramData\obs-studio\plugins\stream-saver\data\locale\en-US.ini
 C:\ProgramData\obs-studio\plugins\stream-saver\data\effects\redact_blur.effect
-C:\ProgramData\obs-studio\plugins\stream-saver\data\worker\stream-saver-ocr.exe
+C:\ProgramData\obs-studio\plugins\stream-saver\data\worker\stream_saver_ocr.py
+C:\ProgramData\obs-studio\plugins\stream-saver\data\worker\python\python.exe
 ```
 
 Linux:
