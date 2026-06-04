@@ -12,10 +12,6 @@ $ErrorActionPreference = "Stop"
     --distpath worker `
     --workpath build\pyinstaller `
     --specpath build\pyinstaller `
-    --collect-all paddleocr `
-    --collect-all paddlex `
-    --collect-all paddle `
-    --copy-metadata paddleocr `
-    --copy-metadata paddlex `
-    --copy-metadata paddlepaddle `
+    --collect-all onnxruntime `
+    --collect-all openvino `
     $Worker

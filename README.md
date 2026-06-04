@@ -1,6 +1,6 @@
 # Stream Saver
 
-Stream Saver is an OBS Studio effect filter that redacts sensitive text from a source or scene before it is streamed or recorded. It samples incoming video frames, sends them to a local PaddleOCR worker, matches detected text against user-configured words or phrases, and blurs matching regions.
+Stream Saver is an OBS Studio effect filter that redacts text from a source or scene before it is streamed or recorded. It samples incoming video frames, sends them to a local YOLO text detector worker, and masks detected text regions.
 
 The plugin is designed for Windows x64 and Linux x86_64. OCR and phrase matching happen locally.
 
@@ -9,8 +9,8 @@ The plugin is designed for Windows x64 and Linux x86_64. OCR and phrase matching
 This repository contains the initial implementation scaffold:
 
 - Native OBS C++ effect filter named `stream-saver`
-- Local TCP OCR worker protocol
-- PaddleOCR Python worker
+- Local TCP detector worker protocol
+- YOLO Python worker with ONNX Runtime and OpenVINO backend options
 - GPU effect asset for redaction
 - Unit tests for phrase matching
 - Manual packaging and import instructions
@@ -35,16 +35,32 @@ cmake --install build --prefix package
 
 ## Worker Setup
 
-The worker requires Python and PaddleOCR:
+The worker requires Python plus the detector runtime:
 
 ```bash
 python -m pip install -r worker/requirements.txt
 ```
 
-Use Python 3.9-3.13 for the worker. The pinned latest Paddle stack uses `paddleocr==3.6.0` and `paddlepaddle==3.3.1`; PaddlePaddle does not currently publish Python 3.14 wheels.
+Use Python 3.9-3.13 for the worker. The recommended off-the-shelf model is
+`RoyRud1902/yolo11n-text`, exported from `best.pt` to `yolo11n-text.onnx`.
+It is a nano-class, single-class text detector trained for documents,
+screenshots, UI interfaces, and scene text. You can also provide another
+YOLOv8/YOLOv10 text-detection model exported to ONNX for ONNX Runtime or to
+OpenVINO IR for OpenVINO.
+
+The filter includes an `Inference backend` setting:
+
+- `ONNX Runtime CPU` is the portable default.
+- `ONNX Runtime DirectML` is the Windows GPU path that can work well for AMD.
+- `ONNX Runtime CUDA` targets Nvidia CUDA runtimes.
+- `OpenVINO` targets Intel CPU/iGPU acceleration.
+- `Custom backend` passes an advanced backend string to the worker.
+
+YOLO mode redacts every detected text region. It does not perform phrase
+recognition by itself.
 
 For release packages, prefer a managed Python environment in `data/worker/python`
-so users do not need global Python or global PaddleOCR:
+so users do not need global Python or global detector dependencies:
 
 ```powershell
 .\scripts\package-managed-worker.ps1
@@ -78,6 +94,6 @@ After copying the folder, restart OBS, open a source or scene's filters, and add
 
 ## Development Notes
 
-The render path is intentionally non-blocking. OCR requests are skipped if the worker is still busy. In interval mode, frames are submitted only when `frame_index % interval == 0`.
+The render path is intentionally non-blocking. Detection requests are skipped if the worker is still busy, so `Every frame` means the filter submits the newest OBS frame whenever inference is ready rather than waiting for the interval gate. In interval mode, frames are submitted only when `frame_index % interval == 0`. Changing the worker path, port, backend, model path, or image size restarts the worker so the new runtime setting is applied.
 
-The plugin attempts to launch the bundled OCR worker automatically. Use the worker path override if you are running the Python worker directly during development.
+The plugin attempts to launch the bundled detector worker automatically. Use the worker path override if you are running the Python worker directly during development.

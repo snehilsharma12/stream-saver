@@ -1,6 +1,6 @@
-# Stream Saver OCR Protocol
+# Stream Saver Detector Protocol
 
-The OBS plugin and OCR worker communicate over localhost TCP. Messages are newline-delimited JSON.
+The OBS plugin and detector worker communicate over localhost TCP. Messages are newline-delimited JSON.
 
 ## Request: health
 
@@ -11,7 +11,7 @@ The OBS plugin and OCR worker communicate over localhost TCP. Messages are newli
 Response:
 
 ```json
-{"type":"health","ok":true,"engine":"paddleocr"}
+{"type":"health","ok":true,"engine":"yolo","backend":"onnxruntime"}
 ```
 
 ## Request: ocr
@@ -43,7 +43,7 @@ Response:
   "frame_id": 42,
   "detections": [
     {
-      "text": "123 Main St",
+      "text": "text",
       "confidence": 0.94,
       "box": [100, 120, 260, 120, 260, 150, 100, 150]
     }
@@ -51,7 +51,8 @@ Response:
 }
 ```
 
-`box` is an eight-number quadrilateral in OCR image coordinates.
+`box` is an eight-number quadrilateral in detector image coordinates. YOLO mode
+uses `"text":"text"` as a region label; it does not recognize phrase content.
 
 ## Error
 

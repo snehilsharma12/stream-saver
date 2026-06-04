@@ -38,6 +38,18 @@ bool file_exists(const std::string &path)
 	return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
+std::string quote_arg(const std::string &value)
+{
+	std::string quoted = "\"";
+	for (const char ch : value) {
+		if (ch == '\\' || ch == '"')
+			quoted.push_back('\\');
+		quoted.push_back(ch);
+	}
+	quoted.push_back('"');
+	return quoted;
+}
+
 } // namespace
 #endif
 
@@ -62,7 +74,8 @@ bool WorkerProcess::running() const
 #endif
 }
 
-bool WorkerProcess::start(const std::string &path, int port)
+bool WorkerProcess::start(const std::string &path, int port, const std::string &backend,
+			  const std::string &device, const std::string &model_path, int image_size)
 {
 	if (path.empty())
 		return false;
@@ -79,6 +92,10 @@ bool WorkerProcess::start(const std::string &path, int port)
 #endif
 
 	const std::string port_arg = std::to_string(port);
+	const std::string backend_arg = backend.empty() ? "onnxruntime" : backend;
+	const std::string device_arg = device.empty() ? "cpu" : device;
+	const std::string model_arg = model_path.empty() ? "yolo11n-text.onnx" : model_path;
+	const std::string image_size_arg = std::to_string(std::max(64, image_size));
 
 #ifdef _WIN32
 	std::string lower_path = path;
@@ -91,17 +108,19 @@ bool WorkerProcess::start(const std::string &path, int port)
 
 	std::string command;
 	if (python_script) {
-		command = "python.exe \"" + path + "\" --port " + port_arg;
+		command = "python.exe " + quote_arg(path) + " --port " + port_arg;
 	} else if (python_interpreter) {
 		const std::string worker_dir = dirname(dirname(path));
 		const std::string script_path = worker_dir + "\\stream_saver_ocr.py";
 		if (file_exists(script_path))
-			command = "\"" + path + "\" \"" + script_path + "\" --port " + port_arg;
+			command = quote_arg(path) + " " + quote_arg(script_path) + " --port " + port_arg;
 		else
-			command = "\"" + path + "\" --port " + port_arg;
+			command = quote_arg(path) + " --port " + port_arg;
 	} else {
-		command = "\"" + path + "\" --port " + port_arg;
+		command = quote_arg(path) + " --port " + port_arg;
 	}
+	command += " --backend " + quote_arg(backend_arg) + " --device " + quote_arg(device_arg) +
+		   " --model " + quote_arg(model_arg) + " --imgsz " + image_size_arg;
 	const std::string log_path = worker_log_path(path);
 	SECURITY_ATTRIBUTES security = {};
 	security.nLength = sizeof(security);
@@ -132,12 +151,15 @@ bool WorkerProcess::start(const std::string &path, int port)
 	if (log_file != INVALID_HANDLE_VALUE)
 		CloseHandle(log_file);
 
-	blog(LOG_INFO, "[stream-saver] started OCR worker: %s", path.c_str());
+	blog(LOG_INFO, "[stream-saver] started YOLO worker: %s device=%s model=%s imgsz=%s",
+	     path.c_str(), device_arg.c_str(), model_arg.c_str(), image_size_arg.c_str());
 	return true;
 #else
 	pid_ = fork();
 	if (pid_ == 0) {
-		execl(path.c_str(), path.c_str(), "--port", port_arg.c_str(), static_cast<char *>(nullptr));
+		execl(path.c_str(), path.c_str(), "--port", port_arg.c_str(), "--device",
+		      device_arg.c_str(), "--backend", backend_arg.c_str(), "--model", model_arg.c_str(),
+		      "--imgsz", image_size_arg.c_str(), static_cast<char *>(nullptr));
 		_exit(127);
 	}
 
@@ -147,7 +169,8 @@ bool WorkerProcess::start(const std::string &path, int port)
 		return false;
 	}
 
-	blog(LOG_INFO, "[stream-saver] started OCR worker: %s", path.c_str());
+	blog(LOG_INFO, "[stream-saver] started YOLO worker: %s device=%s model=%s imgsz=%s",
+	     path.c_str(), device_arg.c_str(), model_arg.c_str(), image_size_arg.c_str());
 	return true;
 #endif
 }

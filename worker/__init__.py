@@ -1,1 +1,1 @@
-"""Stream Saver OCR worker package."""
+"""Stream Saver detector worker package."""

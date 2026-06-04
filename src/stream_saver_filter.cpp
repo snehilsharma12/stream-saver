@@ -23,10 +23,15 @@ constexpr const char *SETTING_CONFIDENCE = "confidence_threshold";
 constexpr const char *SETTING_BLUR_STRENGTH = "blur_strength";
 constexpr const char *SETTING_BOX_PADDING = "box_padding";
 constexpr const char *SETTING_OCR_MAX_WIDTH = "ocr_max_width";
+constexpr const char *SETTING_INFERENCE_BACKEND = "ocr_device_mode";
+constexpr const char *SETTING_CUSTOM_INFERENCE_BACKEND = "custom_ocr_device";
+constexpr const char *SETTING_YOLO_MODEL_PATH = "yolo_model_path";
+constexpr const char *SETTING_YOLO_IMAGE_SIZE = "yolo_image_size";
 constexpr const char *SETTING_DEBUG_OVERLAY = "debug_overlay";
 constexpr const char *SETTING_WORKER_PATH = "worker_path";
 constexpr const char *SETTING_WORKER_PORT = "worker_port";
-constexpr uint32_t OCR_EFFECTIVE_MAX_WIDTH = 960;
+constexpr uint32_t OCR_EFFECTIVE_MAX_WIDTH = 1920;
+constexpr uint32_t OCR_LEGACY_MAX_WIDTH = 960;
 constexpr uint64_t OCR_STARTUP_COOLDOWN_FRAMES = 60;
 constexpr uint64_t OCR_CONNECT_COOLDOWN_FRAMES = 60;
 constexpr uint64_t OCR_ERROR_COOLDOWN_FRAMES = 300;
@@ -43,10 +48,14 @@ void set_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_int(settings, SETTING_OCR_MODE, static_cast<long long>(OcrMode::Interval));
 	obs_data_set_default_int(settings, SETTING_FRAME_INTERVAL, 60);
-	obs_data_set_default_double(settings, SETTING_CONFIDENCE, 0.75);
+	obs_data_set_default_double(settings, SETTING_CONFIDENCE, 0.50);
 	obs_data_set_default_double(settings, SETTING_BLUR_STRENGTH, MIN_EFFECTIVE_BLUR_STRENGTH);
 	obs_data_set_default_int(settings, SETTING_BOX_PADDING, 8);
 	obs_data_set_default_int(settings, SETTING_OCR_MAX_WIDTH, OCR_EFFECTIVE_MAX_WIDTH);
+	obs_data_set_default_int(settings, SETTING_INFERENCE_BACKEND, static_cast<long long>(InferenceBackend::OnnxCpu));
+	obs_data_set_default_string(settings, SETTING_CUSTOM_INFERENCE_BACKEND, "onnxruntime");
+	obs_data_set_default_string(settings, SETTING_YOLO_MODEL_PATH, "yolo11n-text.onnx");
+	obs_data_set_default_int(settings, SETTING_YOLO_IMAGE_SIZE, 640);
 	obs_data_set_default_bool(settings, SETTING_DEBUG_OVERLAY, false);
 	obs_data_set_default_int(settings, SETTING_WORKER_PORT, 48741);
 }
@@ -78,6 +87,26 @@ obs_properties_t *get_properties(void *)
 	obs_properties_add_int_slider(props, SETTING_OCR_MAX_WIDTH,
 				      obs_module_text("StreamSaver.OcrMaxWidth"), 320,
 				      static_cast<int>(OCR_EFFECTIVE_MAX_WIDTH), 16);
+	obs_property_t *backend = obs_properties_add_list(props, SETTING_INFERENCE_BACKEND,
+							 obs_module_text("StreamSaver.InferenceBackend"),
+							 OBS_COMBO_TYPE_LIST,
+							 OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(backend, obs_module_text("StreamSaver.InferenceBackend.OnnxCpu"),
+				  static_cast<long long>(InferenceBackend::OnnxCpu));
+	obs_property_list_add_int(backend, obs_module_text("StreamSaver.InferenceBackend.DirectMl"),
+				  static_cast<long long>(InferenceBackend::DirectMl));
+	obs_property_list_add_int(backend, obs_module_text("StreamSaver.InferenceBackend.Cuda"),
+				  static_cast<long long>(InferenceBackend::Cuda));
+	obs_property_list_add_int(backend, obs_module_text("StreamSaver.InferenceBackend.OpenVino"),
+				  static_cast<long long>(InferenceBackend::OpenVino));
+	obs_property_list_add_int(backend, obs_module_text("StreamSaver.InferenceBackend.Custom"),
+				  static_cast<long long>(InferenceBackend::Custom));
+	obs_properties_add_text(props, SETTING_CUSTOM_INFERENCE_BACKEND,
+				obs_module_text("StreamSaver.CustomInferenceBackend"), OBS_TEXT_DEFAULT);
+	obs_properties_add_path(props, SETTING_YOLO_MODEL_PATH,
+				obs_module_text("StreamSaver.YoloModelPath"), OBS_PATH_FILE, nullptr, nullptr);
+	obs_properties_add_int_slider(props, SETTING_YOLO_IMAGE_SIZE,
+				      obs_module_text("StreamSaver.YoloImageSize"), 320, 1920, 32);
 	obs_properties_add_bool(props, SETTING_DEBUG_OVERLAY,
 				obs_module_text("StreamSaver.DebugOverlay"));
 	obs_properties_add_path(props, SETTING_WORKER_PATH,
@@ -88,8 +117,36 @@ obs_properties_t *get_properties(void *)
 	return props;
 }
 
+std::string resolve_inference_backend(InferenceBackend mode, const std::string &custom_backend)
+{
+	if (mode == InferenceBackend::DirectMl)
+		return "directml";
+	if (mode == InferenceBackend::Cuda)
+		return "cuda";
+	if (mode == InferenceBackend::OpenVino)
+		return "openvino";
+	if (mode == InferenceBackend::Custom && !custom_backend.empty())
+		return custom_backend;
+	return "onnxruntime";
+}
+
+std::string resolve_inference_device(InferenceBackend mode)
+{
+	if (mode == InferenceBackend::Cuda)
+		return "cuda:0";
+	if (mode == InferenceBackend::OpenVino)
+		return "CPU";
+	return "cpu";
+}
+
 void update_settings(StreamSaverFilter *filter, obs_data_t *settings)
 {
+	const std::string previous_worker_path = filter->worker_path;
+	const uint16_t previous_worker_port = filter->worker_port;
+	const std::string previous_inference_backend = filter->inference_backend;
+	const std::string previous_yolo_model_path = filter->yolo_model_path;
+	const uint32_t previous_yolo_image_size = filter->yolo_image_size;
+
 	filter->phrases = obs_data_get_string(settings, SETTING_PHRASES);
 	filter->matcher.set_phrases(filter->phrases);
 	if (!filter->matcher.has_phrases()) {
@@ -102,12 +159,35 @@ void update_settings(StreamSaverFilter *filter, obs_data_t *settings)
 	filter->confidence_threshold = static_cast<float>(obs_data_get_double(settings, SETTING_CONFIDENCE));
 	filter->blur_strength = static_cast<float>(obs_data_get_double(settings, SETTING_BLUR_STRENGTH));
 	filter->box_padding = static_cast<int>(obs_data_get_int(settings, SETTING_BOX_PADDING));
-	filter->ocr_max_width =
-		static_cast<uint32_t>(std::max<int64_t>(320, obs_data_get_int(settings, SETTING_OCR_MAX_WIDTH)));
+	int64_t configured_ocr_max_width = obs_data_get_int(settings, SETTING_OCR_MAX_WIDTH);
+	if (configured_ocr_max_width == OCR_LEGACY_MAX_WIDTH)
+		configured_ocr_max_width = OCR_EFFECTIVE_MAX_WIDTH;
+	filter->ocr_max_width = static_cast<uint32_t>(std::max<int64_t>(320, configured_ocr_max_width));
+	filter->inference_backend_mode =
+		static_cast<InferenceBackend>(obs_data_get_int(settings, SETTING_INFERENCE_BACKEND));
+	filter->custom_inference_backend = obs_data_get_string(settings, SETTING_CUSTOM_INFERENCE_BACKEND);
+	filter->inference_backend =
+		resolve_inference_backend(filter->inference_backend_mode, filter->custom_inference_backend);
+	filter->inference_device = resolve_inference_device(filter->inference_backend_mode);
+	filter->yolo_model_path = obs_data_get_string(settings, SETTING_YOLO_MODEL_PATH);
+	if (filter->yolo_model_path.empty())
+		filter->yolo_model_path = "yolo11n-text.onnx";
+	filter->yolo_image_size =
+		static_cast<uint32_t>(std::max<int64_t>(320, obs_data_get_int(settings, SETTING_YOLO_IMAGE_SIZE)));
 	filter->debug_overlay = obs_data_get_bool(settings, SETTING_DEBUG_OVERLAY);
 	filter->worker_path = obs_data_get_string(settings, SETTING_WORKER_PATH);
 	filter->worker_port = static_cast<uint16_t>(obs_data_get_int(settings, SETTING_WORKER_PORT));
 	filter->ocr_client.configure("127.0.0.1", filter->worker_port);
+
+	if (filter->worker_process.running() &&
+	    (previous_worker_path != filter->worker_path || previous_worker_port != filter->worker_port ||
+	     previous_inference_backend != filter->inference_backend ||
+	     previous_yolo_model_path != filter->yolo_model_path ||
+	     previous_yolo_image_size != filter->yolo_image_size)) {
+		filter->worker_process.stop();
+		filter->warmup_submitted.store(false);
+		filter->next_ocr_frame.store(filter->frame_index.load());
+	}
 }
 
 bool output_active()
@@ -146,7 +226,10 @@ bool ensure_worker_started(StreamSaverFilter *filter, bool apply_startup_cooldow
 	if (worker_path.empty())
 		return false;
 
-	const bool started = filter->worker_process.start(worker_path, filter->worker_port);
+	const bool started = filter->worker_process.start(worker_path, filter->worker_port,
+							  filter->inference_backend, filter->inference_device,
+							  filter->yolo_model_path,
+							  static_cast<int>(filter->yolo_image_size));
 	if (started && apply_startup_cooldown)
 		filter->next_ocr_frame.store(filter->frame_index.load() + OCR_STARTUP_COOLDOWN_FRAMES);
 	return started;
@@ -420,6 +503,7 @@ void submit_frame_for_ocr(StreamSaverFilter *filter, uint64_t frame_index)
 	     frame.png_base64.size());
 
 	const uint64_t generation = filter->output_generation.load();
+	filter->latest_ocr_submission.store(frame_index);
 	const bool submitted = filter->ocr_client.submit(frame, [filter, ocr_width, ocr_height, generation](OcrResult result) {
 		if (!result.error.empty()) {
 			blog(filter->debug_overlay ? LOG_INFO : LOG_DEBUG,
@@ -436,6 +520,13 @@ void submit_frame_for_ocr(StreamSaverFilter *filter, uint64_t frame_index)
 		if (!output_active() || filter->output_generation.load() != generation) {
 			blog(LOG_INFO,
 			     "[stream-saver] OCR frame %llu ignored: output stopped or changed before result",
+			     static_cast<unsigned long long>(result.frame_id));
+			return;
+		}
+
+		if (result.frame_id < filter->latest_ocr_submission.load()) {
+			blog(LOG_INFO,
+			     "[stream-saver] OCR frame %llu ignored: newer OCR frame already submitted",
 			     static_cast<unsigned long long>(result.frame_id));
 			return;
 		}

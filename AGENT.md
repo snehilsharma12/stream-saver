@@ -4,14 +4,14 @@ This file is the handoff for future coding sessions. Read it before changing the
 
 ## Project
 
-Stream Saver is an OBS Studio effect filter that redacts configured words and phrases from a source or scene before streaming or recording.
+Stream Saver is an OBS Studio effect filter that redacts detected text regions from a source or scene before streaming or recording.
 
 High-level flow:
 
 1. OBS render thread captures a scaled PNG frame from the filtered source.
-2. The C++ plugin sends the frame to a local TCP OCR worker.
-3. `worker/stream_saver_ocr.py` runs PaddleOCR and returns detected text boxes.
-4. `src/matcher.cpp` matches detections against user phrases and converts boxes into normalized redaction regions.
+2. The C++ plugin sends the frame to a local TCP detector worker.
+3. `worker/stream_saver_ocr.py` runs YOLO text detection and returns detected text boxes.
+4. `src/matcher.cpp` converts boxes into normalized redaction regions.
 5. `data/effects/redact_blur.effect` renders the redaction regions on the source.
 
 Important paths:
@@ -19,7 +19,7 @@ Important paths:
 - `src/stream_saver_filter.cpp`: OBS filter lifecycle, capture, worker startup/warmup, OCR submission, effect parameters.
 - `src/ocr_client.cpp`: newline-delimited JSON TCP client for the worker.
 - `src/matcher.cpp`: phrase normalization and redaction-region matching.
-- `worker/stream_saver_ocr.py`: PaddleOCR worker.
+- `worker/stream_saver_ocr.py`: YOLO detector worker.
 - `data/effects/redact_blur.effect`: GPU redaction shader.
 - `tests/cpp/test_matcher.cpp`: matcher unit tests.
 - `tests/python/test_worker_protocol.py`: worker protocol tests.
@@ -29,11 +29,13 @@ Important paths:
 
 Recent work focused on live OBS testing:
 
-- Worker startup/warmup was moved earlier so the OCR worker starts when the filter exists, not only after recording begins.
+- Worker startup/warmup was moved earlier so the detector worker starts when the filter exists, not only after recording begins.
 - Real source frames must only be submitted while recording or streaming.
 - OCR results that return after recording stops should be ignored; stale regions should not carry into the next recording.
 - Redaction currently uses a solid dark mask in `redact_blur.effect`, because blur left readable ghost text.
-- PaddleOCR is configured for faster screen OCR with `PP-OCRv4_mobile_det` and `en_PP-OCRv4_mobile_rec`.
+- The worker now expects a YOLO text-detection model exported to ONNX or OpenVINO IR. The current recommended off-the-shelf model is `RoyRud1902/yolo11n-text`, exported as `yolo11n-text.onnx`.
+- The filter has an `Inference backend` setting: ONNX Runtime CPU, ONNX Runtime DirectML, ONNX Runtime CUDA, OpenVINO, or Custom backend. Changing backend/model/image-size/path/port restarts the worker.
+- YOLO mode redacts all detected text regions. It does not recognize phrases; phrase-specific redaction would require a separate recognizer after detection.
 - Full-frame debug dumps are separate from OCR-size dumps:
   - `stream-saver-last-frame.png`: OCR input frame.
   - `stream-saver-last-source-frame.png`: full source frame, when debug overlay is enabled and a downscaled OCR input is used.
@@ -113,8 +115,8 @@ Read logs by failure class:
 
 - No redaction and no `OCR frame ... submitted`: submit gating/lifecycle problem.
 - `submitted` but no response until much later: OCR too slow or worker busy.
-- Worker `ocr response ... texts=` lacks the target: OCR model/capture quality problem.
-- Worker detects target but plugin regions are wrong: matcher or coordinate normalization problem.
+- Worker `detector response ... detections=0` lacks the target: model/capture quality problem.
+- Worker detects target but plugin regions are wrong: coordinate normalization problem.
 - Regions are correct but visual is readable: shader/effect problem.
 
 ## OCR Protocol
@@ -142,9 +144,7 @@ Warmup requests use `warmup: true` and a synthetic image. They should not write 
 
 ## Worker Notes
 
-Use Python 3.9-3.13. Python 3.14 is not supported by the pinned PaddlePaddle wheel stack.
-
-The worker disables MKL-DNN/oneDNN because PaddlePaddle 3.x has failed on some Windows CPU/runtime combinations.
+Use Python 3.9-3.13. Worker dependencies are `Pillow`, `numpy`, `onnxruntime`, and optionally `openvino` or `onnxruntime-directml`.
 
 The plugin worker preference on Windows is:
 
@@ -172,9 +172,7 @@ Generated debug outputs must not be committed or packaged:
 
 For the small-text issue:
 
-1. Inspect the latest worker `texts=` line and saved OCR dump.
-2. If small words are absent from `texts=`, raise OCR capture size or tune Paddle detection thresholds.
-3. If small words are present but not redacted, inspect `src/matcher.cpp` and phrase normalization.
-4. If redaction regions exist but are visually missing, inspect normalized region coordinates and shader limits.
-5. Consider adding a crop/tiling OCR mode for small text: OCR the full frame at a modest scale, plus targeted lower-band or text-heavy crops at higher resolution.
-
+1. Inspect the latest worker `detector response ... detections=` line and saved frame dump.
+2. If small text is absent, verify the YOLO model is trained for text detection and raise YOLO image size.
+3. If detections exist but are not redacted, inspect normalized region coordinates and shader limits.
+4. For phrase-specific redaction, add a lightweight recognizer on cropped YOLO boxes.

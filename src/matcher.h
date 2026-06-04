@@ -31,6 +31,10 @@ struct RedactionRegion {
 
 std::string normalize_text(const std::string &input);
 std::vector<std::string> parse_phrase_list(const std::string &phrases);
+std::vector<RedactionRegion> make_regions_for_detections(const std::vector<OcrDetection> &detections,
+							  float confidence_threshold,
+							  int padding_px, int frame_width,
+							  int frame_height);
 
 class PhraseMatcher {
 public:

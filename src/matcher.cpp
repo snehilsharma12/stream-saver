@@ -47,6 +47,21 @@ size_t word_count(const std::string &text)
 	return count;
 }
 
+bool oversized_detection(float left, float top, float right, float bottom, int frame_width,
+			 int frame_height)
+{
+	if (frame_width < 320 || frame_height < 180)
+		return false;
+
+	const float width = std::max(0.0f, right - left);
+	const float height = std::max(0.0f, bottom - top);
+	const float frame_area = std::max(1.0f, static_cast<float>(frame_width * frame_height));
+	const float area_ratio = (width * height) / frame_area;
+	const float width_ratio = width / std::max(1.0f, static_cast<float>(frame_width));
+	const float height_ratio = height / std::max(1.0f, static_cast<float>(frame_height));
+	return area_ratio > 0.18f || width_ratio > 0.82f || height_ratio > 0.35f;
+}
+
 RedactionRegion make_region(float left, float top, float right, float bottom, int padding_px,
 			     int frame_width, int frame_height)
 {
@@ -106,6 +121,29 @@ std::vector<std::string> parse_phrase_list(const std::string &phrases)
 	return parsed;
 }
 
+std::vector<RedactionRegion> make_regions_for_detections(const std::vector<OcrDetection> &detections,
+							  float confidence_threshold,
+							  int padding_px, int frame_width,
+							  int frame_height)
+{
+	std::vector<RedactionRegion> regions;
+	if (frame_width <= 0 || frame_height <= 0)
+		return regions;
+
+	for (const auto &detection : detections) {
+		if (detection.confidence < confidence_threshold)
+			continue;
+
+		regions.push_back(make_region(std::min(detection.box.x1, detection.box.x2),
+					      std::min(detection.box.y1, detection.box.y2),
+					      std::max(detection.box.x1, detection.box.x2),
+					      std::max(detection.box.y1, detection.box.y2),
+					      padding_px, frame_width, frame_height));
+	}
+
+	return regions;
+}
+
 void PhraseMatcher::set_phrases(const std::string &phrases)
 {
 	phrases_ = parse_phrase_list(phrases);
@@ -142,12 +180,20 @@ std::vector<RedactionRegion> PhraseMatcher::match(const std::vector<OcrDetection
 		if (normalized.empty())
 			continue;
 
+		const float detection_left = std::min(detection.box.x1, detection.box.x2);
+		const float detection_top = std::min(detection.box.y1, detection.box.y2);
+		const float detection_right = std::max(detection.box.x1, detection.box.x2);
+		const float detection_bottom = std::max(detection.box.y1, detection.box.y2);
+		if (oversized_detection(detection_left, detection_top, detection_right, detection_bottom,
+					frame_width, frame_height))
+			continue;
+
 		candidates.push_back({
 			normalized,
-			std::min(detection.box.x1, detection.box.x2),
-			std::min(detection.box.y1, detection.box.y2),
-			std::max(detection.box.x1, detection.box.x2),
-			std::max(detection.box.y1, detection.box.y2),
+			detection_left,
+			detection_top,
+			detection_right,
+			detection_bottom,
 		});
 
 		bool matched = false;
@@ -161,11 +207,8 @@ std::vector<RedactionRegion> PhraseMatcher::match(const std::vector<OcrDetection
 		if (!matched)
 			continue;
 
-		regions.push_back(make_region(std::min(detection.box.x1, detection.box.x2),
-					      std::min(detection.box.y1, detection.box.y2),
-					      std::max(detection.box.x1, detection.box.x2),
-					      std::max(detection.box.y1, detection.box.y2),
-					      padding_px, frame_width, frame_height));
+		regions.push_back(make_region(detection_left, detection_top, detection_right,
+					      detection_bottom, padding_px, frame_width, frame_height));
 	}
 
 	std::sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b) {

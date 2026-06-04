@@ -1,17 +1,39 @@
-# Stream Saver OCR Worker
+# Stream Saver YOLO Worker
 
-The worker runs PaddleOCR out of process and listens on `127.0.0.1:48741` by default.
+The worker runs YOLO text detection out of process and listens on `127.0.0.1:48741` by default.
 
 Development:
 
 ```bash
 python -m pip install -r requirements.txt
-python stream_saver_ocr.py --port 48741
+python stream_saver_ocr.py --port 48741 --model yolo11n-text.onnx
 ```
 
-Use Python 3.9-3.13 for the worker environment. The latest PaddlePaddle release currently provides wheels through CPython 3.13, so Python 3.14 will not install the pinned stack.
+Use Python 3.9-3.13 for the worker environment.
 
-The worker disables PaddleOCR's MKL-DNN/oneDNN CPU backend by default because PaddlePaddle 3.x can fail on some Windows CPU/runtime combinations during OCR inference.
+Recommended model: `RoyRud1902/yolo11n-text` from Hugging Face. Download
+`best.pt`, then export it with Ultralytics:
+
+```bash
+python -m pip install ultralytics onnx onnxsim
+python -c "from ultralytics import YOLO; YOLO('best.pt').export(format='onnx', imgsz=640, simplify=True)"
+```
+
+Rename the exported file to `yolo11n-text.onnx` or set the model path in OBS.
+Plain COCO `yolov10n` weights are not enough for text redaction unless they were
+trained to detect text.
+
+Backend selection:
+
+```bash
+python stream_saver_ocr.py --port 48741 --backend onnxruntime --model yolo11n-text.onnx
+python stream_saver_ocr.py --port 48741 --backend directml --model yolo11n-text.onnx
+python stream_saver_ocr.py --port 48741 --backend cuda --model yolo11n-text.onnx
+python stream_saver_ocr.py --port 48741 --backend openvino --device CPU --model yolo11n-text.xml
+```
+
+Install `onnxruntime-directml` instead of regular `onnxruntime` for the DirectML
+provider. Use an OpenVINO-exported model for the `openvino` backend.
 
 Health check:
 
@@ -20,7 +42,7 @@ printf '{"type":"health"}\n' | nc 127.0.0.1 48741
 ```
 
 Release packaging should bundle a managed Python runtime in `data/worker/python`
-so users do not need global Python or global PaddleOCR. The plugin looks for
+so users do not need global Python or global detector dependencies. The plugin looks for
 workers in this order on Windows:
 
 1. `data/worker/python/python.exe` running `data/worker/stream_saver_ocr.py`

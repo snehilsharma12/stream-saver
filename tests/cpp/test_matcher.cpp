@@ -87,6 +87,22 @@ void test_split_phrase_line_match()
 	       "split phrase region covers combined words");
 }
 
+void test_ignores_oversized_detection()
+{
+	PhraseMatcher matcher;
+	matcher.set_phrases("Steam");
+
+	std::vector<OcrDetection> detections = {
+		{"OBS menu Steam controls and lots of unrelated screen text", 0.95f, {0, 10, 600, 290}},
+		{"Steam", 0.95f, {120, 80, 170, 100}},
+	};
+
+	const auto regions = matcher.match(detections, 0.75f, 5, 600, 300);
+	expect(regions.size() == 1, "ignores oversized phrase-containing detection");
+	expect(regions[0].left > 0.15f && regions[0].right < 0.35f,
+	       "keeps only the normal-sized matching detection");
+}
+
 } // namespace
 
 int main()
@@ -96,6 +112,7 @@ int main()
 	test_match();
 	test_clamping();
 	test_split_phrase_line_match();
+	test_ignores_oversized_detection();
 	std::cout << "matcher tests passed\n";
 	return 0;
 }

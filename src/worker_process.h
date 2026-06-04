@@ -18,7 +18,8 @@ public:
 	WorkerProcess(const WorkerProcess &) = delete;
 	WorkerProcess &operator=(const WorkerProcess &) = delete;
 
-	bool start(const std::string &path, int port);
+	bool start(const std::string &path, int port, const std::string &backend,
+		   const std::string &device, const std::string &model_path, int image_size);
 	void stop();
 	bool running() const;
 
