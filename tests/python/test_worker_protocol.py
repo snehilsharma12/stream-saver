@@ -12,6 +12,7 @@ class FakeEngine:
     model_path = "fake.onnx"
 
     def recognize_png_base64(self, image_b64):
+        self.last_image_b64 = image_b64
         if image_b64 == "":
             return []
         return [Detection("text", 0.94, [1, 2, 3, 2, 3, 4, 1, 4])]
@@ -39,6 +40,13 @@ class WorkerProtocolTests(unittest.TestCase):
         encoded = json.dumps(response, separators=(",", ":"))
         self.assertIn('"type":"ocr_result"', encoded)
 
+    def test_debug_defaults_to_false(self):
+        response = self.handler._dispatch(
+            {"type": "ocr", "frame_id": 9, "image": "not-real-image"}
+        )
+        self.assertEqual(response["type"], "ocr_result")
+        self.assertEqual(self.handler.engine.last_image_b64, "not-real-image")
+
     def test_empty_image_returns_empty_detection_list(self):
         response = self.handler._dispatch({"type": "ocr", "frame_id": 8, "image": ""})
         self.assertEqual(response["detections"], [])
@@ -49,6 +57,23 @@ class WorkerProtocolTests(unittest.TestCase):
 
 
 class YoloResultParsingTests(unittest.TestCase):
+    def test_directml_provider_uses_device_id(self):
+        class FakeOrt:
+            @staticmethod
+            def get_available_providers():
+                return ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+        engine = object.__new__(YoloTextDetector)
+        engine.backend = "directml"
+        engine.device = "1"
+
+        providers = engine._onnx_providers(FakeOrt)
+
+        self.assertEqual(
+            providers,
+            [("DmlExecutionProvider", {"device_id": 1}), "CPUExecutionProvider"],
+        )
+
     def test_parses_yolo_xyxy_result_shape(self):
         engine = object.__new__(YoloTextDetector)
         engine.confidence_threshold = 0.25

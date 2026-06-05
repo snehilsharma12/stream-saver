@@ -1,6 +1,9 @@
 build/
 package/
 dist/
+package/linux/
+package/linux-install/
+package/linux-release/
 *.user
 *.suo
 *.obj
@@ -15,4 +18,6 @@ __pycache__/
 build_x64/
 build_x86_64/
 worker/stream-saver-ocr.exe
+worker/*.onnx
+worker/*.pt
 build/pyinstaller/

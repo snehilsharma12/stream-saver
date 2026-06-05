@@ -84,9 +84,17 @@ class YoloTextDetector:
             raise RuntimeError("ONNX Runtime is not installed. Install onnxruntime or onnxruntime-directml.") from exc
 
         providers = self._onnx_providers(ort)
-        self._session = ort.InferenceSession(self.model_path, providers=providers)
+        try:
+            self._session = ort.InferenceSession(self.model_path, providers=providers)
+        except Exception as exc:
+            if providers == ["CPUExecutionProvider"]:
+                raise
+            print(f"onnxruntime provider startup failed, falling back to CPU: {exc}", flush=True)
+            self._session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
         self._input_name = self._session.get_inputs()[0].name
         self._output_names = [output.name for output in self._session.get_outputs()]
+        print(f"onnxruntime providers active={self._session.get_providers()}", flush=True)
+        print(f"onnxruntime provider options={self._session.get_provider_options()}", flush=True)
 
     def _load_recognizer(self) -> None:
         try:
@@ -101,7 +109,11 @@ class YoloTextDetector:
         backend = self.backend.lower()
 
         if backend == "directml" and "DmlExecutionProvider" in available:
-            return ["DmlExecutionProvider", "CPUExecutionProvider"]
+            try:
+                device_id = max(0, int(self.device))
+            except ValueError:
+                device_id = 0
+            return [("DmlExecutionProvider", {"device_id": device_id}), "CPUExecutionProvider"]
         if backend == "cuda" and "CUDAExecutionProvider" in available:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if backend == "openvino-onnx" and "OpenVINOExecutionProvider" in available:
@@ -443,12 +455,13 @@ class StreamSaverHandler(socketserver.StreamRequestHandler):
         frame_id = int(request.get("frame_id", 0))
         image = str(request.get("image", ""))
         warmup = bool(request.get("warmup", False))
+        debug = bool(request.get("debug", False))
         started = time.monotonic()
         worker_dir = Path(__file__).resolve().parent
         dump_path = worker_dir / "stream-saver-last-frame.png"
         source_dump_path = worker_dir / "stream-saver-last-source-frame.png"
         source_image = str(request.get("source_image") or image)
-        if not warmup:
+        if debug and not warmup:
             try:
                 dump_path.write_bytes(base64.b64decode(image))
             except Exception as exc:

@@ -24,6 +24,7 @@ Response:
   "height": 720,
   "source_width": 1920,
   "source_height": 1080,
+  "debug": false,
   "format": "png-base64",
   "image": "...",
   "source_image": "..."
@@ -31,9 +32,9 @@ Response:
 ```
 
 `width` and `height` describe the PNG sent to OCR. `source_width` and
-`source_height` describe the original OBS source frame. `source_image` is
-optional and is used only for full-frame debug dumps when the OCR image was
-downscaled.
+`source_height` describe the original OBS source frame. `debug` enables worker
+frame dumps. `source_image` is optional and is used only for full-frame debug
+dumps when the OCR image was downscaled.
 
 Response:
 

@@ -35,7 +35,11 @@ cmake --install build --prefix package
 
 ## Worker Setup
 
-The worker requires Python plus the detector runtime:
+Release packages should include a private Python runtime, detector dependencies,
+and `yolo11n-text.onnx`, so end users do not need global Python or a manual model
+download.
+
+For development, the worker requires Python plus the detector runtime:
 
 ```bash
 python -m pip install -r worker/requirements.txt
@@ -52,6 +56,8 @@ The filter includes an `Inference backend` setting:
 
 - `ONNX Runtime CPU` is the portable default.
 - `ONNX Runtime DirectML` is the Windows GPU path that can work well for AMD.
+  Use `DirectML device ID` to choose the adapter on systems with both an iGPU
+  and dGPU; try `0` and `1`, then compare the worker log timings.
 - `ONNX Runtime CUDA` targets Nvidia CUDA runtimes.
 - `OpenVINO` targets Intel CPU/iGPU acceleration.
 - `Custom backend` passes an advanced backend string to the worker.
@@ -68,6 +74,57 @@ so users do not need global Python or global detector dependencies:
 
 The PyInstaller executable path remains available as a fallback, but the plugin
 prefers the managed Python runtime first on Windows.
+
+## Release Package
+
+Build a ready-to-install Windows zip with:
+
+```powershell
+.\scripts\package-release-windows.ps1 -ModelPath C:\path\to\yolo11n-text.onnx
+```
+
+The script stages the OBS plugin folder, adds the managed Python runtime,
+copies the model, runs a bundled-worker smoke test, and writes:
+
+```text
+dist\stream-saver-windows-x64.zip
+```
+
+Users should extract the zip so the `stream-saver` folder lands under:
+
+```text
+C:\ProgramData\obs-studio\plugins
+```
+
+Build a ready-to-install Linux tarball on Linux with:
+
+```bash
+bash scripts/package-release-linux.sh --model-path /path/to/yolo11n-text.onnx
+```
+
+From Windows with WSL installed, run:
+
+```powershell
+.\scripts\package-release-linux-wsl.ps1
+```
+
+The script stages the OBS local plugin folder layout, creates a private Python
+venv with Linux worker dependencies, copies the model, runs a bundled-worker
+smoke test, and writes:
+
+```text
+dist/stream-saver-linux-x86_64.tar.gz
+```
+
+Users should extract the tarball and run:
+
+```bash
+./install.sh
+```
+
+The installer detects native OBS and Flatpak OBS config paths. It can also be
+forced with `./install.sh --native`, `./install.sh --flatpak`, or
+`./install.sh --dir /custom/obs/plugins`.
 
 ## Install Into OBS
 

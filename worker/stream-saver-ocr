@@ -1,3 +1,6 @@
 #!/usr/bin/env sh
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ -x "$SCRIPT_DIR/python/bin/python" ]; then
+  exec "$SCRIPT_DIR/python/bin/python" "$SCRIPT_DIR/stream_saver_ocr.py" "$@"
+fi
 exec python3 "$SCRIPT_DIR/stream_saver_ocr.py" "$@"

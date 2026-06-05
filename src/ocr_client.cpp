@@ -236,6 +236,7 @@ OcrResult OcrClient::send_request(const OcrFrame &frame)
 		<< ",\"source_width\":" << frame.source_width
 		<< ",\"source_height\":" << frame.source_height
 		<< ",\"warmup\":" << (frame.warmup ? "true" : "false")
+		<< ",\"debug\":" << (frame.debug ? "true" : "false")
 		<< ",\"format\":\"png-base64\",\"image\":\""
 		<< escape_json(frame.png_base64) << "\"";
 	if (!frame.source_png_base64.empty()) {

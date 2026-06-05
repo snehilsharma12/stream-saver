@@ -47,6 +47,7 @@ struct StreamSaverFilter {
 	std::string yolo_model_path = "yolo11n-text.onnx";
 	OcrMode ocr_mode = OcrMode::Interval;
 	InferenceBackend inference_backend_mode = InferenceBackend::OnnxCpu;
+	int directml_device_id = 0;
 	uint32_t frame_interval = 5;
 	float confidence_threshold = 0.75f;
 	float blur_strength = 8.0f;

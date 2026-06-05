@@ -24,6 +24,7 @@ constexpr const char *SETTING_BLUR_STRENGTH = "blur_strength";
 constexpr const char *SETTING_BOX_PADDING = "box_padding";
 constexpr const char *SETTING_OCR_MAX_WIDTH = "ocr_max_width";
 constexpr const char *SETTING_INFERENCE_BACKEND = "ocr_device_mode";
+constexpr const char *SETTING_DIRECTML_DEVICE_ID = "directml_device_id";
 constexpr const char *SETTING_CUSTOM_INFERENCE_BACKEND = "custom_ocr_device";
 constexpr const char *SETTING_YOLO_MODEL_PATH = "yolo_model_path";
 constexpr const char *SETTING_YOLO_IMAGE_SIZE = "yolo_image_size";
@@ -52,7 +53,12 @@ void set_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, SETTING_BLUR_STRENGTH, MIN_EFFECTIVE_BLUR_STRENGTH);
 	obs_data_set_default_int(settings, SETTING_BOX_PADDING, 8);
 	obs_data_set_default_int(settings, SETTING_OCR_MAX_WIDTH, OCR_EFFECTIVE_MAX_WIDTH);
+#ifdef _WIN32
+	obs_data_set_default_int(settings, SETTING_INFERENCE_BACKEND, static_cast<long long>(InferenceBackend::DirectMl));
+#else
 	obs_data_set_default_int(settings, SETTING_INFERENCE_BACKEND, static_cast<long long>(InferenceBackend::OnnxCpu));
+#endif
+	obs_data_set_default_int(settings, SETTING_DIRECTML_DEVICE_ID, 0);
 	obs_data_set_default_string(settings, SETTING_CUSTOM_INFERENCE_BACKEND, "onnxruntime");
 	obs_data_set_default_string(settings, SETTING_YOLO_MODEL_PATH, "yolo11n-text.onnx");
 	obs_data_set_default_int(settings, SETTING_YOLO_IMAGE_SIZE, 640);
@@ -101,6 +107,8 @@ obs_properties_t *get_properties(void *)
 				  static_cast<long long>(InferenceBackend::OpenVino));
 	obs_property_list_add_int(backend, obs_module_text("StreamSaver.InferenceBackend.Custom"),
 				  static_cast<long long>(InferenceBackend::Custom));
+	obs_properties_add_int_slider(props, SETTING_DIRECTML_DEVICE_ID,
+				      obs_module_text("StreamSaver.DirectMlDeviceId"), 0, 8, 1);
 	obs_properties_add_text(props, SETTING_CUSTOM_INFERENCE_BACKEND,
 				obs_module_text("StreamSaver.CustomInferenceBackend"), OBS_TEXT_DEFAULT);
 	obs_properties_add_path(props, SETTING_YOLO_MODEL_PATH,
@@ -130,8 +138,10 @@ std::string resolve_inference_backend(InferenceBackend mode, const std::string &
 	return "onnxruntime";
 }
 
-std::string resolve_inference_device(InferenceBackend mode)
+std::string resolve_inference_device(InferenceBackend mode, int directml_device_id)
 {
+	if (mode == InferenceBackend::DirectMl)
+		return std::to_string(std::max(0, directml_device_id));
 	if (mode == InferenceBackend::Cuda)
 		return "cuda:0";
 	if (mode == InferenceBackend::OpenVino)
@@ -144,6 +154,7 @@ void update_settings(StreamSaverFilter *filter, obs_data_t *settings)
 	const std::string previous_worker_path = filter->worker_path;
 	const uint16_t previous_worker_port = filter->worker_port;
 	const std::string previous_inference_backend = filter->inference_backend;
+	const std::string previous_inference_device = filter->inference_device;
 	const std::string previous_yolo_model_path = filter->yolo_model_path;
 	const uint32_t previous_yolo_image_size = filter->yolo_image_size;
 
@@ -165,10 +176,13 @@ void update_settings(StreamSaverFilter *filter, obs_data_t *settings)
 	filter->ocr_max_width = static_cast<uint32_t>(std::max<int64_t>(320, configured_ocr_max_width));
 	filter->inference_backend_mode =
 		static_cast<InferenceBackend>(obs_data_get_int(settings, SETTING_INFERENCE_BACKEND));
+	filter->directml_device_id = static_cast<int>(std::max<int64_t>(
+		0, obs_data_get_int(settings, SETTING_DIRECTML_DEVICE_ID)));
 	filter->custom_inference_backend = obs_data_get_string(settings, SETTING_CUSTOM_INFERENCE_BACKEND);
 	filter->inference_backend =
 		resolve_inference_backend(filter->inference_backend_mode, filter->custom_inference_backend);
-	filter->inference_device = resolve_inference_device(filter->inference_backend_mode);
+	filter->inference_device =
+		resolve_inference_device(filter->inference_backend_mode, filter->directml_device_id);
 	filter->yolo_model_path = obs_data_get_string(settings, SETTING_YOLO_MODEL_PATH);
 	if (filter->yolo_model_path.empty())
 		filter->yolo_model_path = "yolo11n-text.onnx";
@@ -182,6 +196,7 @@ void update_settings(StreamSaverFilter *filter, obs_data_t *settings)
 	if (filter->worker_process.running() &&
 	    (previous_worker_path != filter->worker_path || previous_worker_port != filter->worker_port ||
 	     previous_inference_backend != filter->inference_backend ||
+	     previous_inference_device != filter->inference_device ||
 	     previous_yolo_model_path != filter->yolo_model_path ||
 	     previous_yolo_image_size != filter->yolo_image_size)) {
 		filter->worker_process.stop();
@@ -262,6 +277,7 @@ void warmup_worker_if_needed(StreamSaverFilter *filter)
 	frame.source_width = frame.width;
 	frame.source_height = frame.height;
 	frame.warmup = true;
+	frame.debug = false;
 	frame.png_base64 = png_base64;
 
 	if (!filter->ocr_client.submit(frame, [filter](OcrResult result) {
@@ -485,6 +501,7 @@ void submit_frame_for_ocr(StreamSaverFilter *filter, uint64_t frame_index)
 	frame.height = static_cast<int>(ocr_height);
 	frame.source_width = static_cast<int>(width);
 	frame.source_height = static_cast<int>(height);
+	frame.debug = filter->debug_overlay;
 	frame.png_base64 = std::move(png_base64);
 	if (filter->debug_overlay && (ocr_width != width || ocr_height != height)) {
 		std::string source_png_base64;

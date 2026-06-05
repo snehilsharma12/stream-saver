@@ -49,7 +49,16 @@ workers in this order on Windows:
 2. `data/worker/stream_saver_ocr.py` through global `python.exe`
 3. `data/worker/stream-saver-ocr.exe`
 
-Managed runtime example:
+Ready-to-install Windows release package:
+
+```powershell
+.\scripts\package-release-windows.ps1 -ModelPath C:\path\to\yolo11n-text.onnx
+```
+
+This creates `dist\stream-saver-windows-x64.zip` with the plugin, managed
+Python runtime, dependencies, worker script, and model.
+
+Managed runtime only:
 
 ```powershell
 cmd /c 'call "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 && cmake --install build_x64 --config RelWithDebInfo --prefix package'

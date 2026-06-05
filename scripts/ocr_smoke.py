@@ -30,7 +30,13 @@ def main() -> int:
     with socket.create_connection(("127.0.0.1", port), timeout=10) as client:
         client.settimeout(90)
         client.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8"))
-        print(client.makefile().readline().strip())
+        line = client.makefile().readline().strip()
+
+    print(line)
+    response = json.loads(line)
+    detections = response.get("detections") or []
+    if response.get("type") != "ocr_result" or not detections:
+        raise RuntimeError("OCR smoke test did not receive any detections")
 
     return 0
 

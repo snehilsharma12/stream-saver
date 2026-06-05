@@ -19,6 +19,7 @@ struct OcrFrame {
 	int source_width = 0;
 	int source_height = 0;
 	bool warmup = false;
+	bool debug = false;
 	std::string png_base64;
 	std::string source_png_base64;
 };
